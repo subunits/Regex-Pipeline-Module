@@ -165,87 +165,101 @@ const asyncPipelines = {
 })();
 
 // ==========================================
-// ENHANCED ASYNC EXAMPLES
+// ENHANCED ASYNC PIPELINE EXAMPLES
 // ==========================================
 
-// 6. Advanced Fluent Async Pipeline with Simulated Database Lookup / Validation
-type UserAuditRecord = {
-  processedCount: number;
-  validUsers: string[];
-  flaggedEmails: string[];
+// 6. Enterprise Log Ingestion & Asynchronous Enrichment Pipeline
+type LogAuditState = {
+  totalProcessed: number;
+  authenticatedUsers: string[];
+  flaggedThreats: { ip: string; reason: string }[];
 };
 
-const advancedAsyncFluentExample = async () => {
-  const pipeline = new FluentAsyncRegexPipeline<UserAuditRecord>({
-    processedCount: 0,
-    validUsers: [],
-    flaggedEmails: []
+const runEnhancedLogPipeline = async () => {
+  const logStream = "Access from IP 192.168.1.50 by user:admin [status: SUCCESS]. Warning: malicious payload from IP 10.0.0.99 [status: BLOCKED].";
+
+  const pipeline = new FluentAsyncRegexPipeline<LogAuditState>({
+    totalProcessed: 0,
+    authenticatedUsers: [],
+    flaggedThreats: []
   })
-    .step(/user:(?<username>\w+)/g, async (acc, match, index, allMatches, str) => {
-      // Simulate an asynchronous API or DB latency check per match
+    .step(/user:(?<username>\w+)/g, async (acc, match) => {
+      // Simulate database lookup latency for user validation
       await new Promise((resolve) => setTimeout(resolve, 15));
-      const username = match.groups?.username;
-      if (username) {
-        acc.processedCount++;
-        acc.validUsers.push(username.toLowerCase());
+      const user = match.groups?.username;
+      if (user) {
+        acc.totalProcessed++;
+        if (!acc.authenticatedUsers.includes(user)) {
+          acc.authenticatedUsers.push(user);
+        }
       }
       return acc;
     })
-    .step(/(?<email>[\w.-]+@[\w.-]+\.\w+)/g, async (acc, match) => {
-      // Simulate async validation checking
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      const email = match.groups?.email;
-      if (email && email.includes("suspicious")) {
-        acc.flaggedEmails.push(email);
+    .step(/IP (?<ip>[\d.]+).*?\[status: (?<status>\w+)\]/g, async (acc, match) => {
+      // Simulate security intelligence API call per IP match
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      const ip = match.groups?.ip;
+      const status = match.groups?.status;
+      
+      if (ip && status === "BLOCKED") {
+        acc.flaggedThreats.push({ ip, reason: "Blocked connection attempt" });
       }
       return acc;
     });
 
-  const logData = "System alert: user:Alice logged in with email alice.admin@secure.com. user:Bob attempted access from bob.suspicious@net.org.";
-  const result = await pipeline.run(logData);
-  console.log("Example 6 (Advanced Fluent Async Pipeline):", result);
+  const result = await pipeline.run(logStream);
+  console.log("Example 6 (Enterprise Log Ingestion Pipeline):", result);
 };
 
-// 7. Composed Async Pipeline with Cross-Step Context Dependency
-type SensorMetrics = {
+// 7. Multi-stage Composed Async Sensor Telemetry Pipeline with Conditional Mutation
+type TelemetryState = {
   readings: number[];
   peakValue: number;
-  anomalyDetected: boolean;
+  thresholdExceeded: boolean;
+  alertLog: string[];
 };
 
-const enhancedComposedAsyncExample = async () => {
-  const collectReadingsStep = asyncRegexStep<SensorMetrics>(/val=(\d+)/g, async (acc, match) => {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    const val = Number(match[1]);
-    acc.readings = acc.readings || [];
-    acc.readings.push(val);
-    acc.peakValue = Math.max(acc.peakValue || 0, val);
-    return acc;
-  });
+const runEnhancedComposedPipeline = async () => {
+  const telemetryData = "Sensor-A: val=42, status=OK | Sensor-B: val=98, status=CRITICAL | Sensor-C: val=65, status=OK";
 
-  const analyzeAnomalyStep = asyncRegexStep<SensorMetrics>(/status=(?<status>\w+)/g, async (acc, match) => {
+  // Step 1: Extract numeric metrics asynchronously and track peak values
+  const parseMetricsStep = asyncRegexStep<TelemetryState>(/val=(?<val>\d+)/g, async (acc, match) => {
     await new Promise((resolve) => setTimeout(resolve, 10));
-    const status = match.groups?.status;
-    if (status === "CRITICAL" || (acc.peakValue && acc.peakValue > 90)) {
-      acc.anomalyDetected = true;
+    const val = Number(match.groups?.val);
+    if (!isNaN(val)) {
+      acc.readings.push(val);
+      acc.peakValue = Math.max(acc.peakValue || 0, val);
     }
     return acc;
   });
 
-  const pipelineExecutor = composeAsyncRegexPipelines(collectReadingsStep, analyzeAnomalyStep);
-  const telemetryStream = "Sensor telemetry: val=45, status=OK | val=95, status=WARNING";
-  
-  const finalMetrics = await pipelineExecutor(telemetryStream, {
-    readings: [],
-    peakValue: 0,
-    anomalyDetected: false
+  // Step 2: Correlate status flags and trigger asynchronous notifications if threshold is breached
+  const analyzeStatusStep = asyncRegexStep<TelemetryState>(/status=(?<status>\w+)/g, async (acc, match) => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const status = match.groups?.status;
+
+    if (status === "CRITICAL" || (acc.peakValue && acc.peakValue > 90)) {
+      acc.thresholdExceeded = true;
+      acc.alertLog.push(`CRITICAL ALERT: Threshold breached! Peak value recorded at ${acc.peakValue}`);
+    }
+    return acc;
   });
 
-  console.log("Example 7 (Composed Async Pipeline with Context):", finalMetrics);
+  const composedPipeline = composeAsyncRegexPipelines(parseMetricsStep, analyzeStatusStep);
+
+  const initialTelemetryState: TelemetryState = {
+    readings: [],
+    peakValue: 0,
+    thresholdExceeded: false,
+    alertLog: []
+  };
+
+  const finalState = await composedPipeline(telemetryData, initialTelemetryState);
+  console.log("Example 7 (Composed Telemetry Pipeline):", finalState);
 };
 
-// Execute the enhanced async examples
+// Execute the enhanced examples
 (async () => {
-  await advancedAsyncFluentExample();
-  await enhancedComposedAsyncExample();
+  await runEnhancedLogPipeline();
+  await runEnhancedComposedPipeline();
 })();
