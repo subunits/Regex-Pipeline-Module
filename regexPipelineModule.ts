@@ -164,37 +164,88 @@ const asyncPipelines = {
   console.log("Example5:", example5);
 })();
 
-// 6. Enhanced Composed and One-Liner Async Pipeline Examples
-(async () => {
-  // Composed async pipeline combining multiple async steps
-  const stepNumericSum = asyncRegexStep<{ total: number }>(/\d+/g, async (acc, m) => {
-    await new Promise(r => setTimeout(r, 5));
-    acc.total = (acc.total || 0) + Number(m[0]);
-    return acc;
-  });
+// ==========================================
+// ENHANCED ASYNC EXAMPLES
+// ==========================================
 
-  const stepExtractTags = asyncRegexStep<{ tags: string[] }>(/#\w+/g, async (acc, m) => {
-    await new Promise(r => setTimeout(r, 5));
-    acc.tags = acc.tags || [];
-    acc.tags.push(m[0]);
-    return acc;
-  });
+// 6. Advanced Fluent Async Pipeline with Simulated Database Lookup / Validation
+type UserAuditRecord = {
+  processedCount: number;
+  validUsers: string[];
+  flaggedEmails: string[];
+};
 
-  const composedAsyncPipeline = composeAsyncRegexPipelines(stepNumericSum, stepExtractTags);
-  const resultComposedAsync = await composedAsyncPipeline("Ticket #404: error code 500 in module #auth", { total: 0, tags: [] });
-  console.log("Example6 (Composed Async Pipeline):", resultComposedAsync);
-
-  // One-liner async processor with calculated async transformations
-  const resultOneLinerAsync = await processStringAsync(
-    "Values: 10, 20, 30, 40",
-    { sum: 0, count: 0, average: 0 },
-    asyncRegexStep(/\d+/g, async (acc, m) => {
-      await new Promise(r => setTimeout(r, 2));
-      acc.sum += Number(m[0]);
-      acc.count += 1;
+const advancedAsyncFluentExample = async () => {
+  const pipeline = new FluentAsyncRegexPipeline<UserAuditRecord>({
+    processedCount: 0,
+    validUsers: [],
+    flaggedEmails: []
+  })
+    .step(/user:(?<username>\w+)/g, async (acc, match, index, allMatches, str) => {
+      // Simulate an asynchronous API or DB latency check per match
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      const username = match.groups?.username;
+      if (username) {
+        acc.processedCount++;
+        acc.validUsers.push(username.toLowerCase());
+      }
       return acc;
     })
-  );
-  resultOneLinerAsync.average = resultOneLinerAsync.sum / resultOneLinerAsync.count;
-  console.log("Example7 (One-liner Async Processor):", resultOneLinerAsync);
+    .step(/(?<email>[\w.-]+@[\w.-]+\.\w+)/g, async (acc, match) => {
+      // Simulate async validation checking
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const email = match.groups?.email;
+      if (email && email.includes("suspicious")) {
+        acc.flaggedEmails.push(email);
+      }
+      return acc;
+    });
+
+  const logData = "System alert: user:Alice logged in with email alice.admin@secure.com. user:Bob attempted access from bob.suspicious@net.org.";
+  const result = await pipeline.run(logData);
+  console.log("Example 6 (Advanced Fluent Async Pipeline):", result);
+};
+
+// 7. Composed Async Pipeline with Cross-Step Context Dependency
+type SensorMetrics = {
+  readings: number[];
+  peakValue: number;
+  anomalyDetected: boolean;
+};
+
+const enhancedComposedAsyncExample = async () => {
+  const collectReadingsStep = asyncRegexStep<SensorMetrics>(/val=(\d+)/g, async (acc, match) => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const val = Number(match[1]);
+    acc.readings = acc.readings || [];
+    acc.readings.push(val);
+    acc.peakValue = Math.max(acc.peakValue || 0, val);
+    return acc;
+  });
+
+  const analyzeAnomalyStep = asyncRegexStep<SensorMetrics>(/status=(?<status>\w+)/g, async (acc, match) => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const status = match.groups?.status;
+    if (status === "CRITICAL" || (acc.peakValue && acc.peakValue > 90)) {
+      acc.anomalyDetected = true;
+    }
+    return acc;
+  });
+
+  const pipelineExecutor = composeAsyncRegexPipelines(collectReadingsStep, analyzeAnomalyStep);
+  const telemetryStream = "Sensor telemetry: val=45, status=OK | val=95, status=WARNING";
+  
+  const finalMetrics = await pipelineExecutor(telemetryStream, {
+    readings: [],
+    peakValue: 0,
+    anomalyDetected: false
+  });
+
+  console.log("Example 7 (Composed Async Pipeline with Context):", finalMetrics);
+};
+
+// Execute the enhanced async examples
+(async () => {
+  await advancedAsyncFluentExample();
+  await enhancedComposedAsyncExample();
 })();
