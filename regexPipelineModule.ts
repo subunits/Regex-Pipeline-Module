@@ -163,3 +163,4 @@ const asyncPipelines = {
   const example5 = await runPipelinesAsync<{ sumAsync: { sum: number }, wordsAsync: { words: string[] } }>("12 cats,7 dogs,four birds,9 pigs", asyncPipelines);
   console.log("Example5:", example5);
 })();
+<EOF>
