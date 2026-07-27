@@ -163,4 +163,36 @@ const asyncPipelines = {
   const example5 = await runPipelinesAsync<{ sumAsync: { sum: number }, wordsAsync: { words: string[] } }>("12 cats,7 dogs,four birds,9 pigs", asyncPipelines);
   console.log("Example5:", example5);
 })();
-<EOF>
+
+// 6. Additional Async Pipeline composition and one-liner usage example
+(async () => {
+  const stepA = asyncRegexStep<{ total: number }>(/\d+/g, async (acc, m) => {
+    await new Promise(r => setTimeout(r, 5));
+    acc.total = (acc.total || 0) + Number(m[0]);
+    return acc;
+  });
+
+  const stepB = asyncRegexStep<{ tags: string[] }>(/#\w+/g, async (acc, m) => {
+    await new Promise(r => setTimeout(r, 5));
+    acc.tags = acc.tags || [];
+    acc.tags.push(m[0]);
+    return acc;
+  });
+
+  const composedAsync = composeAsyncRegexPipelines(stepA, stepB);
+  const result6 = await composedAsync("Order 99: #urgent #review items: 5 and 10", { total: 0, tags: [] });
+  console.log("Example6 (Composed Async):", result6);
+
+  const result6OneLiner = await processStringAsync(
+    "Score: 85, 90, 95",
+    { average: 0, count: 0 },
+    asyncRegexStep(/\d+/g, async (acc, m) => {
+      await new Promise(r => setTimeout(r, 2));
+      acc.count += 1;
+      acc.average += Number(m[0]);
+      return acc;
+    })
+  );
+  result6OneLiner.average = result6OneLiner.average / result6OneLiner.count;
+  console.log("Example6 (One-liner Async):", result6OneLiner);
+})();
