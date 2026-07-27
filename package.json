@@ -1,0 +1,62 @@
+{
+  "name": "regex-pipeline-module",
+  "version": "1.0.0",
+  "description": "Production-grade TypeScript regex pipeline processor with sync/async support, fluent API, and type-safe operations",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc && npm run bundle",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=dist/index.js && esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.mjs",
+    "dev": "tsc --watch",
+    "test": "vitest",
+    "test:coverage": "vitest --coverage",
+    "lint": "eslint src --ext .ts",
+    "type-check": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm run test"
+  },
+  "keywords": [
+    "regex",
+    "pipeline",
+    "typescript",
+    "pattern-matching",
+    "functional-programming",
+    "async",
+    "reducer",
+    "fluent-api"
+  ],
+  "author": "subunits",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/subunits/Regex-Pipeline-Module.git"
+  },
+  "bugs": {
+    "url": "https://github.com/subunits/Regex-Pipeline-Module/issues"
+  },
+  "homepage": "https://github.com/subunits/Regex-Pipeline-Module#readme",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "@vitest/coverage-v8": "^1.0.0",
+    "esbuild": "^0.19.0",
+    "eslint": "^8.55.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
+}
