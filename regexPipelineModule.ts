@@ -165,101 +165,111 @@ const asyncPipelines = {
 })();
 
 // ==========================================
-// ENHANCED ASYNC PIPELINE EXAMPLES
+// REFACTORED ASYNC LOG INGESTION EXAMPLES
 // ==========================================
 
-// 6. Enterprise Log Ingestion & Asynchronous Enrichment Pipeline
-type LogAuditState = {
-  totalProcessed: number;
-  authenticatedUsers: string[];
-  flaggedThreats: { ip: string; reason: string }[];
+// Domain Types for Structured Log Processing
+type LogIngestMetrics = {
+  totalEntries: number;
+  ipAccessCounts: Record<string, number>;
+  activeSessions: Set<string>;
+  threatDetections: { ip: string; threatLevel: string; timestamp: string }[];
 };
 
-const runEnhancedLogPipeline = async () => {
-  const logStream = "Access from IP 192.168.1.50 by user:admin [status: SUCCESS]. Warning: malicious payload from IP 10.0.0.99 [status: BLOCKED].";
+// Mock async threat intelligence lookup service
+async function lookupIpThreatLevel(ip: string): Promise<string> {
+  await new Promise((resolve) => setTimeout(resolve, 12));
+  return ip.startsWith("10.0") ? "HIGH" : "LOW";
+}
 
-  const pipeline = new FluentAsyncRegexPipeline<LogAuditState>({
-    totalProcessed: 0,
-    authenticatedUsers: [],
-    flaggedThreats: []
-  })
-    .step(/user:(?<username>\w+)/g, async (acc, match) => {
-      // Simulate database lookup latency for user validation
-      await new Promise((resolve) => setTimeout(resolve, 15));
-      const user = match.groups?.username;
-      if (user) {
-        acc.totalProcessed++;
-        if (!acc.authenticatedUsers.includes(user)) {
-          acc.authenticatedUsers.push(user);
-        }
-      }
-      return acc;
-    })
-    .step(/IP (?<ip>[\d.]+).*?\[status: (?<status>\w+)\]/g, async (acc, match) => {
-      // Simulate security intelligence API call per IP match
-      await new Promise((resolve) => setTimeout(resolve, 25));
-      const ip = match.groups?.ip;
-      const status = match.groups?.status;
-      
-      if (ip && status === "BLOCKED") {
-        acc.flaggedThreats.push({ ip, reason: "Blocked connection attempt" });
-      }
-      return acc;
-    });
+// 6. Refactored Fluent Log Ingestion Pipeline using Named Capture Groups
+const runRefactoredLogIngestPipeline = async () => {
+  const rawServerLog = `
+    [2026-07-26T21:00:00Z] INFO IP=192.168.1.15 session=sess_abc99 user=johndoe action=LOGIN
+    [2026-07-26T21:01:15Z] WARN IP=10.0.0.99 session=sess_bad01 user=root action=BREACH_ATTEMPT
+    [2026-07-26T21:02:30Z] INFO IP=192.168.1.15 session=sess_abc99 user=johndoe action=QUERY
+  `;
 
-  const result = await pipeline.run(logStream);
-  console.log("Example 6 (Enterprise Log Ingestion Pipeline):", result);
-};
-
-// 7. Multi-stage Composed Async Sensor Telemetry Pipeline with Conditional Mutation
-type TelemetryState = {
-  readings: number[];
-  peakValue: number;
-  thresholdExceeded: boolean;
-  alertLog: string[];
-};
-
-const runEnhancedComposedPipeline = async () => {
-  const telemetryData = "Sensor-A: val=42, status=OK | Sensor-B: val=98, status=CRITICAL | Sensor-C: val=65, status=OK";
-
-  // Step 1: Extract numeric metrics asynchronously and track peak values
-  const parseMetricsStep = asyncRegexStep<TelemetryState>(/val=(?<val>\d+)/g, async (acc, match) => {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    const val = Number(match.groups?.val);
-    if (!isNaN(val)) {
-      acc.readings.push(val);
-      acc.peakValue = Math.max(acc.peakValue || 0, val);
-    }
-    return acc;
-  });
-
-  // Step 2: Correlate status flags and trigger asynchronous notifications if threshold is breached
-  const analyzeStatusStep = asyncRegexStep<TelemetryState>(/status=(?<status>\w+)/g, async (acc, match) => {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    const status = match.groups?.status;
-
-    if (status === "CRITICAL" || (acc.peakValue && acc.peakValue > 90)) {
-      acc.thresholdExceeded = true;
-      acc.alertLog.push(`CRITICAL ALERT: Threshold breached! Peak value recorded at ${acc.peakValue}`);
-    }
-    return acc;
-  });
-
-  const composedPipeline = composeAsyncRegexPipelines(parseMetricsStep, analyzeStatusStep);
-
-  const initialTelemetryState: TelemetryState = {
-    readings: [],
-    peakValue: 0,
-    thresholdExceeded: false,
-    alertLog: []
+  type LogGroups = {
+    timestamp: string;
+    level: string;
+    ip: string;
+    session: string;
+    user: string;
+    action: string;
   };
 
-  const finalState = await composedPipeline(telemetryData, initialTelemetryState);
-  console.log("Example 7 (Composed Telemetry Pipeline):", finalState);
+  const logPipeline = new FluentAsyncRegexPipeline<LogIngestMetrics>({
+    totalEntries: 0,
+    ipAccessCounts: {},
+    activeSessions: new Set<string>(),
+    threatDetections: []
+  })
+    .step<LogGroups>(
+      /\[(?<timestamp>[^\]]+)\]\s+(?<level>\w+)\s+IP=(?<ip>[\d.]+)\s+session=(?<session>\w+)\s+user=(?<user>\w+)\s+action=(?<action>\w+)/g,
+      async (acc, match) => {
+        const { timestamp, ip, session, action } = match.groups!;
+        
+        acc.totalEntries++;
+        acc.ipAccessCounts[ip] = (acc.ipAccessCounts[ip] || 0) + 1;
+        acc.activeSessions.add(session);
+
+        // Asynchronously check threat intel if action indicates risk or suspicious origin
+        if (action === "BREACH_ATTEMPT" || ip.startsWith("10.0")) {
+          const threatLevel = await lookupIpThreatLevel(ip);
+          acc.threatDetections.push({ ip, threatLevel, timestamp });
+        }
+
+        return acc;
+      }
+    );
+
+  const finalMetrics = await logPipeline.run(rawServerLog);
+  // Convert Set to Array for clean JSON visualization
+  console.log("Example 6 (Refactored Fluent Log Ingestion):", {
+    ...finalMetrics,
+    activeSessions: Array.from(finalMetrics.activeSessions)
+  });
 };
 
-// Execute the enhanced examples
+// 7. Refactored Composed Async Log Pipeline separating parsing from security auditing
+const runRefactoredComposedLogPipeline = async () => {
+  const securityLogStream = "SRC=192.168.1.50 EVT=AUTH_SUCCESS | SRC=10.0.4.12 EVT=UNAUTHORIZED_ACCESS";
+
+  type AuditState = {
+    eventsParsed: number;
+    securityAlerts: string[];
+  };
+
+  const parseLogStep = asyncRegexStep<AuditState>(/SRC=(?<ip>[\d.]+)\s+EVT=(?<event>\w+)/g, async (acc, match) => {
+    await new Promise((r) => setTimeout(r, 8));
+    acc.eventsParsed++;
+    return acc;
+  });
+
+  const auditThreatsStep = asyncRegexStep<AuditState>(/SRC=(?<ip>[\d.]+)\s+EVT=(?<event>\w+)/g, async (acc, match) => {
+    await new Promise((r) => setTimeout(r, 10));
+    const { ip, event } = match.groups!;
+    const threatLevel = await lookupIpThreatLevel(ip);
+
+    if (event === "UNAUTHORIZED_ACCESS" || threatLevel === "HIGH") {
+      acc.securityAlerts.push(`Alert: IP ${ip} triggered security event ${event} with rating ${threatLevel}`);
+    }
+    return acc;
+  });
+
+  const composedAuditor = composeAsyncRegexPipelines(parseLogStep, auditThreatsStep);
+
+  const auditResult = await composedAuditor(securityLogStream, {
+    eventsParsed: 0,
+    securityAlerts: []
+  });
+
+  console.log("Example 7 (Refactored Composed Log Pipeline):", auditResult);
+};
+
+// Execute refactored log pipeline examples
 (async () => {
-  await runEnhancedLogPipeline();
-  await runEnhancedComposedPipeline();
+  await runRefactoredLogIngestPipeline();
+  await runRefactoredComposedLogPipeline();
 })();
