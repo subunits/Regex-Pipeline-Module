@@ -178,7 +178,7 @@ class RegexPipeline:
         """Synchronous full-pipeline execution."""
         prepped = self._run_pre(text)
         ctx = context or RunContext(original=text)
-        ctx.original = text      # always reflect actual runtime input
+        ctx.original = text
         ctx.prepped  = prepped
         try:
             core_out = core_handler(prepped)
@@ -195,7 +195,7 @@ class RegexPipeline:
         """Async execution — core_handler may be a coroutine function."""
         prepped = self._run_pre(text)
         ctx = context or RunContext(original=text)
-        ctx.original = text      # always reflect actual runtime input
+        ctx.original = text
         ctx.prepped  = prepped
         try:
             if asyncio.iscoroutinefunction(core_handler):
@@ -292,7 +292,6 @@ if __name__ == "__main__":
     def stub_explainer(text: str) -> str:
         return "The token 'for' activates in coding contexts. SR: @{:context coding:}([:symbol for:])"
 
-    # --- reuse pipeline on different inputs ---
     for raw_text in [
         "p = 0 for q in qlist: pprev = p",
         "ax = [fig.add_subplot(2,1,k+1) for k in range(2)]",
@@ -305,7 +304,6 @@ if __name__ == "__main__":
         print(f"SR:         {result.sr.sr}")
         print(f"Scores:     {result.scores}")
 
-    # --- async ---
     async def async_explainer(text: str) -> str:
         await asyncio.sleep(0)
         return "Activates on 'for' in code. SR: @{:context coding:}([:symbol for:])"
@@ -320,7 +318,6 @@ if __name__ == "__main__":
 
     asyncio.run(main())
 
-    # --- order violation ---
     print("\n--- Order violation ---")
     try:
         bad = RegexPipeline()
