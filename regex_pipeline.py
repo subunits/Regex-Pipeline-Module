@@ -1,7 +1,7 @@
 import re
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 
 # ---------------------------------------------------------------------------
@@ -17,10 +17,10 @@ PostProcessor = Callable[[Any], Any]       # chained: each receives previous out
 class RunContext:
     """Runtime metadata that travels alongside the text through the pipeline."""
     original:   str
-    prepped:    str                        = ""
-    feature_id: str                        = ""
-    layer:      int                        = -1
-    meta:       Dict[str, Any]             = field(default_factory=dict)
+    prepped:    str            = ""
+    feature_id: str            = ""
+    layer:      int            = -1
+    meta:       Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -38,7 +38,6 @@ class PipelineResult:
     sr:      SemanticRegex
     scores:  Dict[str, Any] = field(default_factory=dict)
 
-    # Convenience pass-throughs
     @property
     def original(self) -> str:
         return self.context.original
@@ -167,7 +166,6 @@ class RegexPipeline:
                 f"Final post-processor must return a PipelineResult, got {type(value).__name__}. "
                 "Ensure score_step() is the last post-processor."
             )
-        # Stamp runtime context — always reflects the actual run, not registration time
         value.context = context
         return value
 
@@ -175,12 +173,13 @@ class RegexPipeline:
         self,
         text: str,
         core_handler: CoreHandler,
-        context: RunContext = None,
+        context: Optional[RunContext] = None,
     ) -> PipelineResult:
         """Synchronous full-pipeline execution."""
         prepped = self._run_pre(text)
         ctx = context or RunContext(original=text)
-        ctx.prepped = prepped
+        ctx.original = text      # always reflect actual runtime input
+        ctx.prepped  = prepped
         try:
             core_out = core_handler(prepped)
         except Exception as e:
@@ -191,12 +190,13 @@ class RegexPipeline:
         self,
         text: str,
         core_handler: CoreHandler,
-        context: RunContext = None,
+        context: Optional[RunContext] = None,
     ) -> PipelineResult:
         """Async execution — core_handler may be a coroutine function."""
         prepped = self._run_pre(text)
         ctx = context or RunContext(original=text)
-        ctx.prepped = prepped
+        ctx.original = text      # always reflect actual runtime input
+        ctx.prepped  = prepped
         try:
             if asyncio.iscoroutinefunction(core_handler):
                 core_out = await core_handler(prepped)
@@ -262,9 +262,8 @@ def score_step(
                 f"score_step received {type(sr).__name__}, expected SemanticRegex. "
                 "Ensure parse_sr_step() runs before score_step()."
             )
-        # context is a placeholder; _run_post stamps the real one
         return PipelineResult(
-            context=RunContext(original=""),
+            context=RunContext(original=""),   # placeholder; _run_post stamps the real one
             sr=sr,
             scores=scorer(sr),
         )
@@ -312,12 +311,9 @@ if __name__ == "__main__":
         return "Activates on 'for' in code. SR: @{:context coding:}([:symbol for:])"
 
     async def main():
-        ctx = RunContext(original="", feature_id="gemma-2b-feat99", layer=12)
-        result = await pipeline.run_async(
-            "for lam, prob in suite.Items():",
-            async_explainer,
-            context=ctx,
-        )
+        raw = "for lam, prob in suite.Items():"
+        ctx = RunContext(original=raw, feature_id="gemma-2b-feat99", layer=12)
+        result = await pipeline.run_async(raw, async_explainer, context=ctx)
         print(f"\nAsync original:   {result.original}")
         print(f"Async feature:    {result.context.feature_id}  layer={result.context.layer}")
         print(f"Async SR:         {result.sr.sr}")
