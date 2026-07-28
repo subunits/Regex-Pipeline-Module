@@ -1,7 +1,7 @@
 import re
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Tuple, Union
 
 
 # ---------------------------------------------------------------------------
@@ -9,21 +9,21 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 # ---------------------------------------------------------------------------
 
 PreProcessor  = Callable[[str], str]
-CoreHandler   = Callable[[str], Any]          # str → SR string (or awaitable)
-PostProcessor = Callable[[Any], Any]          # SR/any → scored result or next form
+CoreHandler   = Callable[[str], Any]       # str → SR string (or awaitable)
+PostProcessor = Callable[[Any], Any]       # chained: each receives previous output
 
 
 @dataclass
 class SemanticRegex:
     """Parsed output from the explainer model."""
-    raw: str                        # full model response
-    sr: str                         # extracted SR expression
-    explanation: str = ""           # prose before "SR:"
+    raw: str                # full model response
+    sr: str                 # extracted SR expression
+    explanation: str = ""   # prose before "SR:"
 
 
 @dataclass
 class PipelineResult:
-    """What comes out the other end."""
+    """Typed return value from run() / run_async()."""
     original: str
     prepped: str
     sr: SemanticRegex
@@ -36,6 +36,7 @@ class PipelineResult:
 # ---------------------------------------------------------------------------
 
 _SR_PREFIX = re.compile(r"(?i)SR:\s*")
+
 
 def parse_sr(raw: str) -> SemanticRegex:
     """
@@ -60,18 +61,40 @@ class RegexPipeline:
     """
     Three-phase pipeline: pre-process → core → post-process.
 
-    Pre-processors:  str  → str   (regex substitutions, normalization)
-    Core handler:    str  → str   (explainer model call; sync or async)
-    Post-processors: Any  → Any   (SR parsing, scoring, structured output)
+    Pre-processors:  str  → str            (normalization, highlighting)
+    Core handler:    str  → str            (explainer model call; sync or async)
+    Post-processors: Any  → Any            (SR parsing, scoring, structured output)
 
-    Unlike the original, post-processors are not forced to be str→str —
-    they can return scores, dicts, or any structured result, and each
-    stage receives the output of the previous one.
+    Post-processors chain — each receives the output of the previous one.
+    The final post-processor must return a PipelineResult.
+
+    Step ordering is enforced: highlight must precede truncate in pre,
+    and parse_sr must precede score in post. Violations raise at registration.
     """
+
+    # Names that must appear in this relative order within their stage
+    _PRE_ORDER  = ["highlight", "truncate"]
+    _POST_ORDER = ["parse_sr", "score"]
 
     def __init__(self):
         self._pre:  List[Tuple[str, PreProcessor]]  = []
         self._post: List[Tuple[str, PostProcessor]] = []
+
+    # ------------------------------------------------------------------
+    # Order enforcement
+    # ------------------------------------------------------------------
+
+    def _check_order(self, name: str, existing: List[Tuple[str, Any]], order: List[str]) -> None:
+        """Raise if adding `name` would violate the required ordering."""
+        if name not in order:
+            return
+        new_idx = order.index(name)
+        for existing_name, _ in existing:
+            if existing_name in order and order.index(existing_name) > new_idx:
+                raise ValueError(
+                    f"Step '{name}' must be added before '{existing_name}'. "
+                    f"Required order: {order}"
+                )
 
     # ------------------------------------------------------------------
     # Registration
@@ -85,7 +108,8 @@ class RegexPipeline:
         flags: int = 0,
     ) -> "RegexPipeline":
         """Add a regex substitution to the pre-processing stage."""
-        compiled = re.compile(pattern, flags)           # compile once
+        self._check_order(name, self._pre, self._PRE_ORDER)
+        compiled = re.compile(pattern, flags)       # compile once
         def _proc(text: str) -> str:
             return compiled.sub(repl, text)
         self._pre.append((name, _proc))
@@ -93,6 +117,7 @@ class RegexPipeline:
 
     def add_pre_fn(self, name: str, fn: PreProcessor) -> "RegexPipeline":
         """Add an arbitrary str→str function to the pre-processing stage."""
+        self._check_order(name, self._pre, self._PRE_ORDER)
         self._pre.append((name, fn))
         return self
 
@@ -101,6 +126,7 @@ class RegexPipeline:
         Add a post-processing step. Receives whatever the previous step
         returned — not constrained to str→str.
         """
+        self._check_order(name, self._post, self._POST_ORDER)
         self._post.append((name, fn))
         return self
 
@@ -116,16 +142,21 @@ class RegexPipeline:
                 raise RuntimeError(f"Pre-processor '{name}' failed: {e}") from e
         return text
 
-    def _run_post(self, value: Any) -> Any:
+    def _run_post(self, value: Any) -> PipelineResult:
         for name, fn in self._post:
             try:
                 value = fn(value)
             except Exception as e:
                 raise RuntimeError(f"Post-processor '{name}' failed: {e}") from e
+        if not isinstance(value, PipelineResult):
+            raise TypeError(
+                f"Final post-processor must return a PipelineResult, got {type(value).__name__}. "
+                "Ensure score_step() is the last post-processor."
+            )
         return value
 
-    def run(self, text: str, core_handler: CoreHandler) -> Any:
-        """Synchronous execution."""
+    def run(self, text: str, core_handler: CoreHandler) -> PipelineResult:
+        """Synchronous full-pipeline execution."""
         prepped = self._run_pre(text)
         try:
             core_out = core_handler(prepped)
@@ -133,10 +164,10 @@ class RegexPipeline:
             raise RuntimeError(f"Core handler failed: {e}") from e
         return self._run_post(core_out)
 
-    async def run_async(self, text: str, core_handler: CoreHandler) -> Any:
+    async def run_async(self, text: str, core_handler: CoreHandler) -> PipelineResult:
         """
         Async execution — core_handler may be a coroutine function
-        (e.g. an async LLM API call).
+        (e.g. an async LLM API call). Pre/post stages remain synchronous.
         """
         prepped = self._run_pre(text)
         try:
@@ -168,8 +199,9 @@ def highlight_step(
     flags: int = re.IGNORECASE,
 ) -> Tuple[str, PreProcessor]:
     """
-    Returns an (name, fn) pre-processor that wraps activating tokens
-    in << >> delimiters, matching Apple's explainer prompt format.
+    Pre-processor: wraps activating tokens in << >> delimiters,
+    matching Apple's explainer prompt format.
+    Must be added before truncate_step.
     """
     compiled = re.compile(activation_pattern, flags)
     def _fn(text: str) -> str:
@@ -178,7 +210,10 @@ def highlight_step(
 
 
 def truncate_step(max_chars: int = 256) -> Tuple[str, PreProcessor]:
-    """Trim to a window around the first activation marker."""
+    """
+    Pre-processor: trims to a window centered on the first << >> marker.
+    Must be added after highlight_step.
+    """
     def _fn(text: str) -> str:
         marker = text.find("<<")
         if marker == -1:
@@ -189,20 +224,32 @@ def truncate_step(max_chars: int = 256) -> Tuple[str, PreProcessor]:
 
 
 def parse_sr_step() -> Tuple[str, PostProcessor]:
-    """Post-processor: raw model string → SemanticRegex dataclass."""
+    """Post-processor: raw model string → SemanticRegex. Must precede score_step."""
     return ("parse_sr", parse_sr)
 
 
 def score_step(
-    scorer: Callable[[SemanticRegex], Dict[str, float]]
+    scorer: Callable[[SemanticRegex], Dict[str, float]],
+    original: str = "",
+    prepped: str  = "",
 ) -> Tuple[str, PostProcessor]:
     """
-    Post-processor: SemanticRegex → PipelineResult with scores attached.
+    Post-processor: SemanticRegex → PipelineResult.
+    Must be the final post-processor — run() enforces this.
     Pass your detection/fuzzing/clarity scorer here.
     """
-    def _fn(sr: SemanticRegex) -> Dict[str, Any]:
-        scores = scorer(sr)
-        return {"sr": sr, "scores": scores}
+    def _fn(sr: Any) -> PipelineResult:
+        if not isinstance(sr, SemanticRegex):
+            raise TypeError(
+                f"score_step received {type(sr).__name__}, expected SemanticRegex. "
+                "Ensure parse_sr_step() runs before score_step()."
+            )
+        return PipelineResult(
+            original=original,
+            prepped=prepped,
+            sr=sr,
+            scores=scorer(sr),
+        )
     return ("score", _fn)
 
 
@@ -212,44 +259,53 @@ def score_step(
 
 if __name__ == "__main__":
 
-    # --- build pipeline ---
+    raw_text = "p = 0 for q in qlist: pprev = p"
+
     pipeline = RegexPipeline()
 
-    # pre: normalize whitespace, highlight activating tokens, truncate
+    # pre: normalize → highlight → truncate  (order enforced)
     pipeline.add_pre("normalize", r"\s+", " ")
     pipeline.add_pre_fn(*highlight_step(r"\bfor\b"))
     pipeline.add_pre_fn(*truncate_step(max_chars=200))
 
-    # post: parse SR out of model response, then score
+    # post: parse_sr → score  (order enforced)
     pipeline.add_post_fn(*parse_sr_step())
     pipeline.add_post_fn(*score_step(
-        scorer=lambda sr: {"length": len(sr.sr), "has_field": "field" in sr.sr}
+        scorer=lambda sr: {"length": len(sr.sr), "has_field": "field" in sr.sr},
+        original=raw_text,
     ))
 
     print("Pipeline stages:", pipeline.describe())
 
-    # --- sync run with a stub core handler ---
+    # --- sync ---
     def stub_explainer(text: str) -> str:
-        return f"The token 'for' activates in coding contexts. SR: @{{:context coding:}}([:symbol for:])"
+        return "The token 'for' activates in coding contexts. SR: @{:context coding:}([:symbol for:])"
 
-    result = pipeline.run(
-        "p = 0 for q in qlist: pprev = p",
-        stub_explainer,
-    )
-    print("SR:    ", result["sr"].sr)
-    print("Scores:", result["scores"])
+    result = pipeline.run(raw_text, stub_explainer)
+    print("SR:      ", result.sr.sr)
+    print("Scores:  ", result.scores)
+    print("Original:", result.original)
 
-    # --- async run ---
+    # --- async ---
     async def async_explainer(text: str) -> str:
-        await asyncio.sleep(0)   # simulate async LLM call
-        return f"Activates on 'for' in code. SR: @{{:context coding:}}([:symbol for:])"
+        await asyncio.sleep(0)
+        return "Activates on 'for' in code. SR: @{:context coding:}([:symbol for:])"
 
     async def main():
         result = await pipeline.run_async(
             "ax = [fig.add_subplot(2,1,k+1) for k in range(2)]",
             async_explainer,
         )
-        print("Async SR:    ", result["sr"].sr)
-        print("Async Scores:", result["scores"])
+        print("Async SR:    ", result.sr.sr)
+        print("Async Scores:", result.scores)
 
     asyncio.run(main())
+
+    # --- order violation demo ---
+    print("\n--- Order violation ---")
+    try:
+        bad = RegexPipeline()
+        bad.add_pre_fn(*truncate_step())    # truncate before highlight → error
+        bad.add_pre_fn(*highlight_step(r"\bfor\b"))
+    except ValueError as e:
+        print(f"Caught expected error: {e}")
