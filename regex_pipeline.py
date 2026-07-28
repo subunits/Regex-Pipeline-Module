@@ -72,7 +72,6 @@ class RegexPipeline:
     and parse_sr must precede score in post. Violations raise at registration.
     """
 
-    # Names that must appear in this relative order within their stage
     _PRE_ORDER  = ["highlight", "truncate"]
     _POST_ORDER = ["parse_sr", "score"]
 
@@ -85,7 +84,6 @@ class RegexPipeline:
     # ------------------------------------------------------------------
 
     def _check_order(self, name: str, existing: List[Tuple[str, Any]], order: List[str]) -> None:
-        """Raise if adding `name` would violate the required ordering."""
         if name not in order:
             return
         new_idx = order.index(name)
@@ -109,7 +107,7 @@ class RegexPipeline:
     ) -> "RegexPipeline":
         """Add a regex substitution to the pre-processing stage."""
         self._check_order(name, self._pre, self._PRE_ORDER)
-        compiled = re.compile(pattern, flags)       # compile once
+        compiled = re.compile(pattern, flags)
         def _proc(text: str) -> str:
             return compiled.sub(repl, text)
         self._pre.append((name, _proc))
@@ -122,10 +120,7 @@ class RegexPipeline:
         return self
 
     def add_post_fn(self, name: str, fn: PostProcessor) -> "RegexPipeline":
-        """
-        Add a post-processing step. Receives whatever the previous step
-        returned — not constrained to str→str.
-        """
+        """Add a post-processing step. Receives whatever the previous step returned."""
         self._check_order(name, self._post, self._POST_ORDER)
         self._post.append((name, fn))
         return self
@@ -165,10 +160,7 @@ class RegexPipeline:
         return self._run_post(core_out)
 
     async def run_async(self, text: str, core_handler: CoreHandler) -> PipelineResult:
-        """
-        Async execution — core_handler may be a coroutine function
-        (e.g. an async LLM API call). Pre/post stages remain synchronous.
-        """
+        """Async execution — core_handler may be a coroutine function."""
         prepped = self._run_pre(text)
         try:
             if asyncio.iscoroutinefunction(core_handler):
@@ -198,11 +190,7 @@ def highlight_step(
     activation_pattern: str,
     flags: int = re.IGNORECASE,
 ) -> Tuple[str, PreProcessor]:
-    """
-    Pre-processor: wraps activating tokens in << >> delimiters,
-    matching Apple's explainer prompt format.
-    Must be added before truncate_step.
-    """
+    """Pre-processor: wraps activating tokens in << >>. Must precede truncate_step."""
     compiled = re.compile(activation_pattern, flags)
     def _fn(text: str) -> str:
         return compiled.sub(lambda m: f"<<{m.group(0)}>>", text)
@@ -210,10 +198,7 @@ def highlight_step(
 
 
 def truncate_step(max_chars: int = 256) -> Tuple[str, PreProcessor]:
-    """
-    Pre-processor: trims to a window centered on the first << >> marker.
-    Must be added after highlight_step.
-    """
+    """Pre-processor: trims to a window centered on the first << >> marker. Must follow highlight_step."""
     def _fn(text: str) -> str:
         marker = text.find("<<")
         if marker == -1:
@@ -233,11 +218,7 @@ def score_step(
     original: str = "",
     prepped: str  = "",
 ) -> Tuple[str, PostProcessor]:
-    """
-    Post-processor: SemanticRegex → PipelineResult.
-    Must be the final post-processor — run() enforces this.
-    Pass your detection/fuzzing/clarity scorer here.
-    """
+    """Post-processor: SemanticRegex → PipelineResult. Must be the final post-processor."""
     def _fn(sr: Any) -> PipelineResult:
         if not isinstance(sr, SemanticRegex):
             raise TypeError(
@@ -263,12 +244,10 @@ if __name__ == "__main__":
 
     pipeline = RegexPipeline()
 
-    # pre: normalize → highlight → truncate  (order enforced)
     pipeline.add_pre("normalize", r"\s+", " ")
     pipeline.add_pre_fn(*highlight_step(r"\bfor\b"))
     pipeline.add_pre_fn(*truncate_step(max_chars=200))
 
-    # post: parse_sr → score  (order enforced)
     pipeline.add_post_fn(*parse_sr_step())
     pipeline.add_post_fn(*score_step(
         scorer=lambda sr: {"length": len(sr.sr), "has_field": "field" in sr.sr},
@@ -277,7 +256,6 @@ if __name__ == "__main__":
 
     print("Pipeline stages:", pipeline.describe())
 
-    # --- sync ---
     def stub_explainer(text: str) -> str:
         return "The token 'for' activates in coding contexts. SR: @{:context coding:}([:symbol for:])"
 
@@ -286,7 +264,6 @@ if __name__ == "__main__":
     print("Scores:  ", result.scores)
     print("Original:", result.original)
 
-    # --- async ---
     async def async_explainer(text: str) -> str:
         await asyncio.sleep(0)
         return "Activates on 'for' in code. SR: @{:context coding:}([:symbol for:])"
@@ -301,11 +278,10 @@ if __name__ == "__main__":
 
     asyncio.run(main())
 
-    # --- order violation demo ---
     print("\n--- Order violation ---")
     try:
         bad = RegexPipeline()
-        bad.add_pre_fn(*truncate_step())    # truncate before highlight → error
+        bad.add_pre_fn(*truncate_step())
         bad.add_pre_fn(*highlight_step(r"\bfor\b"))
     except ValueError as e:
         print(f"Caught expected error: {e}")
