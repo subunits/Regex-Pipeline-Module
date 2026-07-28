@@ -14,6 +14,16 @@ PostProcessor = Callable[[Any], Any]       # chained: each receives previous out
 
 
 @dataclass
+class RunContext:
+    """Runtime metadata that travels alongside the text through the pipeline."""
+    original:   str
+    prepped:    str                        = ""
+    feature_id: str                        = ""
+    layer:      int                        = -1
+    meta:       Dict[str, Any]             = field(default_factory=dict)
+
+
+@dataclass
 class SemanticRegex:
     """Parsed output from the explainer model."""
     raw: str                # full model response
@@ -24,11 +34,18 @@ class SemanticRegex:
 @dataclass
 class PipelineResult:
     """Typed return value from run() / run_async()."""
-    original: str
-    prepped: str
-    sr: SemanticRegex
-    scores: Dict[str, Any] = field(default_factory=dict)
-    meta: Dict[str, Any]   = field(default_factory=dict)
+    context: RunContext
+    sr:      SemanticRegex
+    scores:  Dict[str, Any] = field(default_factory=dict)
+
+    # Convenience pass-throughs
+    @property
+    def original(self) -> str:
+        return self.context.original
+
+    @property
+    def prepped(self) -> str:
+        return self.context.prepped
 
 
 # ---------------------------------------------------------------------------
@@ -65,8 +82,10 @@ class RegexPipeline:
     Core handler:    str  → str            (explainer model call; sync or async)
     Post-processors: Any  → Any            (SR parsing, scoring, structured output)
 
-    Post-processors chain — each receives the output of the previous one.
-    The final post-processor must return a PipelineResult.
+    A RunContext is created at run() time and stamped onto the final
+    PipelineResult — so original, prepped, and any metadata always reflect
+    the actual text that flowed through, regardless of how many times the
+    pipeline is reused.
 
     Step ordering is enforced: highlight must precede truncate in pre,
     and parse_sr must precede score in post. Violations raise at registration.
@@ -137,7 +156,7 @@ class RegexPipeline:
                 raise RuntimeError(f"Pre-processor '{name}' failed: {e}") from e
         return text
 
-    def _run_post(self, value: Any) -> PipelineResult:
+    def _run_post(self, value: Any, context: RunContext) -> PipelineResult:
         for name, fn in self._post:
             try:
                 value = fn(value)
@@ -148,20 +167,36 @@ class RegexPipeline:
                 f"Final post-processor must return a PipelineResult, got {type(value).__name__}. "
                 "Ensure score_step() is the last post-processor."
             )
+        # Stamp runtime context — always reflects the actual run, not registration time
+        value.context = context
         return value
 
-    def run(self, text: str, core_handler: CoreHandler) -> PipelineResult:
+    def run(
+        self,
+        text: str,
+        core_handler: CoreHandler,
+        context: RunContext = None,
+    ) -> PipelineResult:
         """Synchronous full-pipeline execution."""
         prepped = self._run_pre(text)
+        ctx = context or RunContext(original=text)
+        ctx.prepped = prepped
         try:
             core_out = core_handler(prepped)
         except Exception as e:
             raise RuntimeError(f"Core handler failed: {e}") from e
-        return self._run_post(core_out)
+        return self._run_post(core_out, ctx)
 
-    async def run_async(self, text: str, core_handler: CoreHandler) -> PipelineResult:
+    async def run_async(
+        self,
+        text: str,
+        core_handler: CoreHandler,
+        context: RunContext = None,
+    ) -> PipelineResult:
         """Async execution — core_handler may be a coroutine function."""
         prepped = self._run_pre(text)
+        ctx = context or RunContext(original=text)
+        ctx.prepped = prepped
         try:
             if asyncio.iscoroutinefunction(core_handler):
                 core_out = await core_handler(prepped)
@@ -169,7 +204,7 @@ class RegexPipeline:
                 core_out = core_handler(prepped)
         except Exception as e:
             raise RuntimeError(f"Core handler failed: {e}") from e
-        return self._run_post(core_out)
+        return self._run_post(core_out, ctx)
 
     # ------------------------------------------------------------------
     # Introspection
@@ -215,19 +250,21 @@ def parse_sr_step() -> Tuple[str, PostProcessor]:
 
 def score_step(
     scorer: Callable[[SemanticRegex], Dict[str, float]],
-    original: str = "",
-    prepped: str  = "",
 ) -> Tuple[str, PostProcessor]:
-    """Post-processor: SemanticRegex → PipelineResult. Must be the final post-processor."""
+    """
+    Post-processor: SemanticRegex → PipelineResult. Must be the final post-processor.
+    original and prepped are injected by the pipeline at runtime via RunContext —
+    no need to pass them here.
+    """
     def _fn(sr: Any) -> PipelineResult:
         if not isinstance(sr, SemanticRegex):
             raise TypeError(
                 f"score_step received {type(sr).__name__}, expected SemanticRegex. "
                 "Ensure parse_sr_step() runs before score_step()."
             )
+        # context is a placeholder; _run_post stamps the real one
         return PipelineResult(
-            original=original,
-            prepped=prepped,
+            context=RunContext(original=""),
             sr=sr,
             scores=scorer(sr),
         )
@@ -240,8 +277,6 @@ def score_step(
 
 if __name__ == "__main__":
 
-    raw_text = "p = 0 for q in qlist: pprev = p"
-
     pipeline = RegexPipeline()
 
     pipeline.add_pre("normalize", r"\s+", " ")
@@ -251,7 +286,6 @@ if __name__ == "__main__":
     pipeline.add_post_fn(*parse_sr_step())
     pipeline.add_post_fn(*score_step(
         scorer=lambda sr: {"length": len(sr.sr), "has_field": "field" in sr.sr},
-        original=raw_text,
     ))
 
     print("Pipeline stages:", pipeline.describe())
@@ -259,25 +293,38 @@ if __name__ == "__main__":
     def stub_explainer(text: str) -> str:
         return "The token 'for' activates in coding contexts. SR: @{:context coding:}([:symbol for:])"
 
-    result = pipeline.run(raw_text, stub_explainer)
-    print("SR:      ", result.sr.sr)
-    print("Scores:  ", result.scores)
-    print("Original:", result.original)
+    # --- reuse pipeline on different inputs ---
+    for raw_text in [
+        "p = 0 for q in qlist: pprev = p",
+        "ax = [fig.add_subplot(2,1,k+1) for k in range(2)]",
+    ]:
+        ctx = RunContext(original=raw_text, feature_id="gpt2-res-25k-layer3-feat42", layer=3)
+        result = pipeline.run(raw_text, stub_explainer, context=ctx)
+        print(f"\nOriginal:   {result.original}")
+        print(f"Prepped:    {result.prepped}")
+        print(f"Feature:    {result.context.feature_id}  layer={result.context.layer}")
+        print(f"SR:         {result.sr.sr}")
+        print(f"Scores:     {result.scores}")
 
+    # --- async ---
     async def async_explainer(text: str) -> str:
         await asyncio.sleep(0)
         return "Activates on 'for' in code. SR: @{:context coding:}([:symbol for:])"
 
     async def main():
+        ctx = RunContext(original="", feature_id="gemma-2b-feat99", layer=12)
         result = await pipeline.run_async(
-            "ax = [fig.add_subplot(2,1,k+1) for k in range(2)]",
+            "for lam, prob in suite.Items():",
             async_explainer,
+            context=ctx,
         )
-        print("Async SR:    ", result.sr.sr)
-        print("Async Scores:", result.scores)
+        print(f"\nAsync original:   {result.original}")
+        print(f"Async feature:    {result.context.feature_id}  layer={result.context.layer}")
+        print(f"Async SR:         {result.sr.sr}")
 
     asyncio.run(main())
 
+    # --- order violation ---
     print("\n--- Order violation ---")
     try:
         bad = RegexPipeline()
