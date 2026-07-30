@@ -6,10 +6,10 @@
  */
 
 // Core functions
-export { regexStep, asyncRegexStep, composeRegexPipelines, composeAsyncRegexPipelines } from './core';
+export { regexStep, asyncRegexStep, composeRegexPipelines, composeAsyncRegexPipelines } from './src/core';
 
 // Fluent API
-export { FluentRegexPipeline, FluentAsyncRegexPipeline } from './fluent';
+export { FluentRegexPipeline, FluentAsyncRegexPipeline } from './src/fluent';
 
 // Utilities
 export {
@@ -17,7 +17,7 @@ export {
   processStringAsync,
   runPipelines,
   runPipelinesAsync
-} from './utils';
+} from './src/utils';
 
 // Types
 export type {
@@ -27,30 +27,9 @@ export type {
   AsyncRegexStep,
   PipelineOptions,
   PipelineResult
-} from './types';
+} from './src/types';
 
-export { PipelineError } from './types';
+export { PipelineError } from './src/types';
 
 // Version
 export const VERSION = '1.0.0';
-
-/**
- * Quick start example:
- * 
- * ```typescript
- * import { processString, regexStep } from 'regex-pipeline-module';
- * 
- * const step1 = regexStep(/\d+/g, (acc, m) => {
- *   acc.numbers.push(Number(m[0]));
- *   return acc;
- * });
- * 
- * const result = processString(
- *   "123 456 789",
- *   { numbers: [] },
- *   step1
- * );
- * 
- * console.log(result.data.numbers); // [123, 456, 789]
- * ```
- */
