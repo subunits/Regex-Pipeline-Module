@@ -6,10 +6,10 @@
  */
 
 // Core functions
-export { regexStep, asyncRegexStep, composeRegexPipelines, composeAsyncRegexPipelines } from './src/core';
+export { regexStep, asyncRegexStep, composeRegexPipelines, composeAsyncRegexPipelines } from './core';
 
 // Fluent API
-export { FluentRegexPipeline, FluentAsyncRegexPipeline } from './src/fluent';
+export { FluentRegexPipeline, FluentAsyncRegexPipeline } from './fluent';
 
 // Utilities
 export {
@@ -17,7 +17,7 @@ export {
   processStringAsync,
   runPipelines,
   runPipelinesAsync
-} from './src/utils';
+} from './utils';
 
 // Types
 export type {
@@ -27,9 +27,9 @@ export type {
   AsyncRegexStep,
   PipelineOptions,
   PipelineResult
-} from './src/types';
+} from './types';
 
-export { PipelineError } from './src/types';
+export { PipelineError } from './types';
 
 // Version
 export const VERSION = '1.0.0';
